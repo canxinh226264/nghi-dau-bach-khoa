@@ -18,7 +18,7 @@ Mở `http://localhost:5173`. (Mở thẳng file `index.html` cũng chạy, như
 |---|---|
 | Thời gian rảnh (phút) | nút −/+, thanh kéo, chọn nhanh 5'–120' |
 | Nhu cầu | Yên tĩnh · Giao tiếp · Đi lại · Làm việc nhỏ · Có đồ ăn · Đồ uống (chọn nhiều) |
-| Vị trí hiện tại | chọn tòa trong danh sách, dùng GPS hoặc chạm lên bản đồ |
+| Vị trí hiện tại | mở trang là tự hỏi quyền vị trí (GPS); không được phép / ngoài bán kính 3 km thì dùng tòa đã chọn lần trước (mặc định D3). Vẫn có thể chọn tòa trong danh sách hoặc chạm lên bản đồ |
 | Đang ở KTX? | bật để thêm lựa chọn "về phòng KTX nghỉ" (chọn tòa KTX) |
 
 **Quy tắc lọc** (trong `js/app.js` › `compute()`):
@@ -36,7 +36,8 @@ Khi bấm **Chỉ đường**, trang lấy tuyến đi bộ thật từ OSRM (`r
 `js/swarm.js` là một bầy con trỏ chuột:
 
 - **Mở trang**: các con trỏ bay vào, chỉ vào giữa màn hình để bản đồ hiện ra, rồi kéo khung chọn để dựng từng phần của bảng điều khiển.
-- **Sau khi chọn nhu cầu / thời gian**: mỗi con trỏ bay tới một khu vực, đặt node lên bản đồ kèm nhãn (tên + phút đi bộ), nối nét đứt về vị trí của bạn.
+- **Mỗi lần bấm nút / đổi trạng thái** (`swarm.rebuild()`): phần vừa đổi mờ đi, con trỏ gần nhất bay tới kéo khung chọn, kéo tới đâu phần đó hiện rõ lại tới đó. Nút vừa bấm luôn được dựng lại; các vùng bị ảnh hưởng (kết quả, ô vị trí, bản đồ, trang chi tiết, tuyến đường, bảng/nút gọn…) cũng được dựng lại theo. Vị trí GPS về sau khi đã mở màn xong cũng được dựng lại như vậy. Phần nào đang được dựng thì không dựng chồng; hết con trỏ rảnh thì lấy bớt con trỏ đang giữ node. Thêm `data-rb="off"` vào nút nào muốn bỏ qua.
+- **Sau khi chọn nhu cầu / thời gian**: dựng lại giao diện xong, mỗi con trỏ bay tới một khu vực, đặt node lên bản đồ kèm nhãn (tên + phút đi bộ), nối nét đứt về vị trí của bạn.
 - **Máy tính**: rê chuột thì bầy bám theo; chuột đứng yên khoảng 1,2 giây thì bầy xếp thành vòng tròn quanh con trỏ.
 - **Điện thoại**: không chạm khoảng 2 giây thì vòng tròn về giữa vùng bản đồ; kéo ngón tay thì vòng tròn đi theo.
 - Nút ✦ ở cột điều khiển bên phải để bật/tắt. Hiệu ứng tự tắt nếu máy bật "giảm chuyển động".

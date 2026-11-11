@@ -1,7 +1,9 @@
 /* Swarm Rebuild — một bầy con trỏ chuột:
  *  1) build(): bay vào, kéo khung chọn và "dựng" từng phần giao diện; chỉ vào bản đồ để bản đồ hiện ra
- *  2) showNodes(): bay tới các khu vực tìm được, gắn nhãn (node) và nối về vị trí của bạn
- *  3) lúc rảnh: bám theo chuột; chuột đứng yên → xếp thành vòng tròn quanh chuột
+ *  2) rebuild(): mỗi khi trạng thái đổi — phần bị đổi mờ đi, con trỏ gần nhất bay tới kéo khung chọn
+ *     và phần đó hiện rõ lại đúng theo khung đang kéo
+ *  3) showNodes(): bay tới các khu vực tìm được, gắn nhãn (node) và nối về vị trí của bạn
+ *  4) lúc rảnh: bám theo chuột; chuột đứng yên → xếp thành vòng tròn quanh chuột
  *     điện thoại: không chạm một lúc → vòng tròn giữa màn hình; kéo ngón tay → vòng tròn đi theo
  */
 (function () {
@@ -39,6 +41,8 @@
       this.p = { x: innerWidth / 2, y: innerHeight / 2, t: -1e9, down: false, seen: false };
       this.phase = 0;
       this.nodes = null;
+      this.active = new Set();     // task khung chọn đang chờ / đang chạy
+      this.rbKeys = new Map();     // khóa (phần tử) đang được dựng lại → task, tránh dựng chồng
 
       this.lines = document.createElementNS(NS, 'svg');
       this.lines.setAttribute('class', 'sw-lines');
@@ -121,52 +125,175 @@
       }
     }
 
+    /** Dựng lại các phần vừa đổi trạng thái.
+     *  targets: [{ el | rect:()=>({left,top,right,bottom}), key?, label, clipEl?, veil?: độ mờ 0–1 | false, tone?: màu lớp mờ, delay? }]
+     *  Phần nào đang được dựng thì bỏ qua (nội dung mới vẫn hiện ra dưới khung đang kéo). */
+    rebuild(targets) {
+      if (!this.enabled) return Promise.resolve();
+      const list = [];
+      for (const t of targets || []) {
+        if (!t) continue;
+        const key = t.key || t.el;
+        if (!key || this.rbKeys.has(key)) continue;
+        const k = Object.assign({}, t, { type: 'box', rebuild: true, key });
+        this.rbKeys.set(key, k);
+        list.push(k);
+      }
+      return Promise.all(list.map((k, j) => this._runTask(k, j)));
+    }
+
+    /** Chờ các lượt dựng lại xong (tối đa max ms) — để bầy dựng giao diện trước rồi mới bay ra bản đồ. */
+    whenIdle(max) {
+      const t0 = now();
+      return new Promise((res) => {
+        const tick = () => {
+          let busy = false;
+          for (const k of this.active) if (k.rebuild) { busy = true; break; }
+          if (!this.enabled || !busy || now() - t0 > (max || 2000)) return res();
+          setTimeout(tick, 60);
+        };
+        tick();
+      });
+    }
+
     _runTask(task, j) {
       return new Promise((resolve) => {
+        this.active.add(task);
         task._finish = () => {
           if (task._fin) return;
           task._fin = true;
+          this.active.delete(task);
+          if (task.rebuild) {
+            this._unveil(task);
+            if (this.rbKeys.get(task.key) === task) this.rbKeys.delete(task.key);
+          }
           try { if (!task._arrived && task.onArrive) task.onArrive(); } catch (e) { /* bỏ qua */ }
           try { if (task.onDone) task.onDone(); } catch (e) { /* bỏ qua */ }
           resolve();
         };
         if (!this.enabled) return task._finish();
         setTimeout(() => {
-          if (!this.enabled) return task._finish();
+          if (!this.enabled || task._fin) return task._finish();
           if (task.type === 'box') {
-            let r = task.el.getBoundingClientRect();
-            let top = r.top, bottom = r.bottom;
-            if (task.clipEl) {
-              const cr = task.clipEl.getBoundingClientRect();
-              top = Math.max(top, cr.top);
-              bottom = Math.min(bottom, cr.bottom);
-            }
-            top = Math.max(top, 0);
-            bottom = Math.min(bottom, innerHeight);
-            if (r.width < 4 || bottom - top < 4 || r.right < 0 || r.left > innerWidth) return task._finish();
-            task.a = { x: r.left + 1, y: top + 1 };
-            task.b = { x: r.right - 1, y: bottom - 1 };
-            task.dur = clamp(240 + (task.b.x - task.a.x + task.b.y - task.a.y) * 0.3, 320, 700);
+            if (!this._measure(task)) return task._finish();
+            const span = task.b.x - task.a.x + task.b.y - task.a.y;
+            task.dur = task.rebuild ? clamp(200 + span * 0.22, 280, 620) : clamp(240 + span * 0.3, 320, 700);
           }
           const goal = task.type === 'box' ? task.a : { x: task.x, y: task.y };
-          const c = this._pick(goal);
+          const c = this._pick(goal, task.rebuild);
           if (!c) return task._finish();
           task.state = 'go';
           task.t0 = now();
           task.c = c;
           c.task = task;
-        }, (task.delay || 0) + j * 120);
+          if (task.rebuild) this._veil(task);
+        }, (task.delay || 0) + j * (task.rebuild ? 70 : 120));
       });
     }
 
-    _pick(goal) {
+    /** Đo lại vùng của task khung chọn (theo thời gian thực, để bám theo phần tử đang di chuyển / cuộn). */
+    _measure(k) {
+      let r;
+      if (k.rect) r = k.rect();
+      else {
+        if (!k.el || !k.el.isConnected) return false;
+        if (k.rebuild && this.opt.hidden && k.el.closest(this.opt.hidden)) return false;
+        r = k.el.getBoundingClientRect();
+      }
+      if (!r) return false;
+      let L = r.left, T = r.top, R = r.right, B = r.bottom;
+      if (k.clipEl) {
+        const cr = k.clipEl.getBoundingClientRect();
+        L = Math.max(L, cr.left); T = Math.max(T, cr.top);
+        R = Math.min(R, cr.right); B = Math.min(B, cr.bottom);
+      }
+      L = Math.max(L, 0); T = Math.max(T, 0);
+      R = Math.min(R, innerWidth); B = Math.min(B, innerHeight);
+      if (R - L < 4 || B - T < 4) return false;
+      k.a = { x: L + 1, y: T + 1 };
+      k.b = { x: R - 1, y: B - 1 };
+      return true;
+    }
+
+    /** steal: hết con trỏ rảnh thì lấy bớt một con trỏ đang giữ node trên bản đồ. */
+    _pick(goal, steal) {
       let best = null, bd = Infinity;
       for (const c of this.cursors) {
         if (c.task) continue;
         const d = Math.hypot(c.x - goal.x, c.y - goal.y);
         if (d < bd) { bd = d; best = c; }
       }
+      if (!best && steal && this.nodes) {
+        for (const c of this.cursors) {
+          if (!c.task || c.task.type !== 'node') continue;
+          const d = Math.hypot(c.x - goal.x, c.y - goal.y);
+          if (d < bd) { bd = d; best = c; }
+        }
+        if (best) this._dropNode(best.task);
+      }
       return best;
+    }
+
+    _dropNode(k) {
+      const N = this.nodes;
+      if (k.state === 'go' && k.onArrive) { try { k.onArrive(); } catch (e) { /* bỏ qua */ } }
+      if (k.c.task === k) k.c.task = null;
+      k.c.el.classList.remove('has-tag');
+      const ln = k.line;
+      ln.classList.add('is-out');
+      setTimeout(() => ln.remove(), 450);
+      if (!N) return;
+      if (k.state === 'hold') N.arrived--;
+      N.tasks = N.tasks.filter((x) => x !== k);
+      if (!N.tasks.length) this.nodes = null;
+    }
+
+    /* ── lớp mờ của phần đang được dựng lại ───────────── */
+    _veil(k) {
+      if (k.veil === false) return;
+      const v = document.createElement('div');
+      v.className = 'sw-veil';
+      if (k.tone) v.style.setProperty('--v', k.tone);
+      v.style.setProperty('--o', k.veil == null ? 0.7 : k.veil);
+      if (k.el && !k.clipEl) {
+        const br = getComputedStyle(k.el).borderRadius;
+        if (br && br !== '0px') v.style.borderRadius = br;
+      }
+      this.root.insertBefore(v, this.root.firstChild);     // nằm dưới con trỏ và khung chọn
+      k.veilEl = v;
+      this._placeVeil(k, 0, 0);
+    }
+
+    /** w, h: kích thước khung đang kéo (từ góc trên-trái) → khoét phần đó khỏi lớp mờ. */
+    _placeVeil(k, w, h) {
+      const v = k.veilEl;
+      if (!v) return;
+      v.style.transform = 'translate(' + (k.a.x - 1).toFixed(1) + 'px,' + (k.a.y - 1).toFixed(1) + 'px)';
+      v.style.width = (k.b.x - k.a.x + 2).toFixed(1) + 'px';
+      v.style.height = (k.b.y - k.a.y + 2).toFixed(1) + 'px';
+      if (w > 0 || h > 0) {
+        const x = (w + 1).toFixed(1) + 'px', y = (h + 1).toFixed(1) + 'px';
+        v.style.clipPath = 'polygon(' + x + ' 0,100% 0,100% 100%,0 100%,0 ' + y + ',' + x + ' ' + y + ')';
+      }
+    }
+
+    _unveil(k) {
+      const v = k.veilEl;
+      if (!v) return;
+      k.veilEl = null;
+      v.classList.add('is-out');
+      setTimeout(() => v.remove(), 300);
+    }
+
+    _abort(c, k) {
+      if (k.box) {
+        const b = k.box;
+        b.classList.add('is-done');
+        setTimeout(() => b.remove(), 450);
+      }
+      k.state = 'done';
+      if (c.task === k) c.task = null;
+      k._finish();
     }
 
     /** items: [{ label, getXY:()=>({x,y}), onArrive }]; opts: { origin:()=>({x,y}), hold } */
@@ -246,7 +373,7 @@
     _taskGoal(c, t) {
       const k = c.task;
       if (k.type === 'box') {
-        if (k.state === 'go') return { x: k.a.x, y: k.a.y, rot: 0, k: 170, z: 0.82 };
+        if (k.state === 'go') return { x: k.a.x, y: k.a.y, rot: 0, k: k.rebuild ? 260 : 170, z: 0.82 };
         if (k.state === 'drag') {
           const p = easeInOut(clamp((t - k.t1) / k.dur, 0, 1));
           return { x: lerp(k.a.x, k.b.x, p), y: lerp(k.a.y, k.b.y, p), rot: 0, k: 900, z: 1 };
@@ -264,20 +391,30 @@
 
     _taskStep(c, t) {
       const k = c.task;
-      const near = (x, y, r) => Math.hypot(c.x - x, c.y - y) < r && Math.hypot(c.vx, c.vy) < 280;
+      const near = (x, y, r, v) => Math.hypot(c.x - x, c.y - y) < r && Math.hypot(c.vx, c.vy) < (v || 280);
       if (k.type === 'box') {
-        if (k.state === 'go' && (near(k.a.x, k.a.y, 6) || t - k.t0 > 2400)) {
-          k.state = 'drag';
-          k.t1 = t;
-          this._ripple(c, 0.6);
-          k.box = this._makeBox(c.color, k.label, k.a);
+        const fast = k.rebuild;
+        if (k.state === 'go') {
+          this._placeVeil(k, 0, 0);
+          if (near(k.a.x, k.a.y, fast ? 9 : 6, fast ? 420 : 280) || t - k.t0 > (fast ? 1400 : 2400)) {
+            k.state = 'drag';
+            k.t1 = t;
+            this._ripple(c, 0.6);
+            k.box = this._makeBox(c.color, k.label, k.a);
+          }
         } else if (k.state === 'drag') {
-          k.box.style.width = Math.max(0, c.x - k.a.x) + 'px';
-          k.box.style.height = Math.max(0, c.y - k.a.y) + 'px';
+          const W = k.b.x - k.a.x, H = k.b.y - k.a.y;
+          const w = clamp(c.x - k.a.x, 0, W), h = clamp(c.y - k.a.y, 0, H);
+          k.box.style.left = k.a.x + 'px';
+          k.box.style.top = k.a.y + 'px';
+          k.box.style.width = w + 'px';
+          k.box.style.height = h + 'px';
+          this._placeVeil(k, w, h);
           if (t - k.t1 > k.dur + 90) {
             k.state = 'done';
-            k.box.style.width = k.b.x - k.a.x + 'px';
-            k.box.style.height = k.b.y - k.a.y + 'px';
+            k.box.style.width = W + 'px';
+            k.box.style.height = H + 'px';
+            this._placeVeil(k, W, H);
             this._ripple(c);
             k._finish();
             const box = k.box;
@@ -364,6 +501,11 @@
       this.last = t;
       if (!this.enabled) return;
       this.phase += dt * 0.85;
+      // đọc layout trước (đo các phần đang dựng), ghi style sau — tránh layout thrashing
+      for (const c of this.cursors) {
+        const k = c.task;
+        if (k && k.type === 'box' && k.state !== 'done' && k.a && !this._measure(k) && k.rebuild) this._abort(c, k);
+      }
       for (const c of this.cursors) {
         let g = c.task ? this._taskGoal(c, t) : null;
         if (!g) g = this._ambient(c, t);
@@ -378,6 +520,8 @@
         c.rot += angDiff(c.rot, g.rot) * Math.min(1, dt * 9);
         c.el.style.transform =
           'translate3d(' + (c.x - TIP_X).toFixed(1) + 'px,' + (c.y - TIP_Y).toFixed(1) + 'px,0) rotate(' + c.rot.toFixed(3) + 'rad)';
+        const busy = !!c.task;
+        if (busy !== c.busy) { c.busy = busy; c.el.classList.toggle('is-busy', busy); }
         if (c.task) this._taskStep(c, t);
       }
       this._drawLines(t);

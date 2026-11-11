@@ -63,7 +63,7 @@
     fTime: $('#fTime'), fNeeds: $('#fNeeds'), fWhere: $('#fWhere'), fResults: $('#fResults'),
     tInput: $('#tInput'), tRange: $('#tRange'), tMinus: $('#tMinus'), tPlus: $('#tPlus'), tChips: $('#tChips'), ruleNote: $('#ruleNote'),
     needs: $('#needs'), needsClear: $('#needsClear'),
-    where: $('#where'), btnGps: $('#btnGps'), btnPick: $('#btnPick'), ktx: $('#ktx'), ktxWrap: $('#ktxWrap'), ktxSel: $('#ktxSel'),
+    where: $('#where'), btnPick: $('#btnPick'), ktx: $('#ktx'), ktxWrap: $('#ktxWrap'), ktxSel: $('#ktxSel'),
     resTitle: $('#resTitle'), resSub: $('#resSub'), q: $('#q'), advice: $('#advice'), list: $('#list'),
     mapCtrl: $('#mapCtrl'), zIn: $('#zIn'), zOut: $('#zOut'), cHome: $('#cHome'), cMe: $('#cMe'), cSwarm: $('#cSwarm'),
     btnMin: $('#btnMin'), fab: $('#fab'), fabCount: $('#fabCount'),
@@ -78,6 +78,7 @@
   const swarm = new window.Swarm(els.swarm, {
     enabled: store.get('swarm', !reduceMotion),
     center: () => visibleCenter(),
+    hidden: '.is-min, .is-unbuilt',     // phần tử nằm trong vùng đang ẩn thì không dựng lại
   });
   els.cSwarm.classList.toggle('is-on', swarm.enabled);
   els.cSwarm.setAttribute('aria-pressed', String(swarm.enabled));
@@ -144,6 +145,47 @@
       paddingBottomRight: [i.r + 40, i.b + 40],
       maxZoom: maxZoom || 18, duration: 0.7,
     });
+  }
+
+  /* ── Swarm rebuild: thao tác nào đổi trạng thái thì bầy con trỏ "dựng lại" phần đó ── */
+  const VEIL_CTRL = 0.5, VEIL_AREA = 0.72;
+  function labelOf(el) {
+    const b = el.querySelector('b');
+    const s = el.dataset.build || el.getAttribute('aria-label') || el.title || (b && b.textContent) || el.textContent;
+    return String(s || '').replace(/\s+/g, ' ').trim().slice(0, 28);
+  }
+  /** mục tiêu: một phần tử giao diện */
+  function rbEl(el, label, o) {
+    if (!el) return null;
+    return Object.assign({ el, label: label || labelOf(el), veil: VEIL_AREA, delay: 60 }, o);
+  }
+  /** mục tiêu: vùng bản đồ đang nhìn thấy (không bị bảng/điều khiển che) */
+  function rbMap(label) {
+    return {
+      key: 'map', label: label || 'Bản đồ', veil: 0.45, tone: 'var(--bg)', delay: 60,
+      rect: () => {
+        const i = insets(), m = 20;
+        return { left: i.l + m, top: i.t + m, right: innerWidth - i.r - m, bottom: innerHeight - i.b - m };
+      },
+    };
+  }
+  function rb() {
+    if (!swarm.enabled) return;
+    const list = Array.prototype.filter.call(arguments, Boolean);
+    list.forEach((t) => { if (t.el && !t.clipEl && els.scroll.contains(t.el)) t.clipEl = els.scroll; });
+    swarm.rebuild(list);
+  }
+  /** các phần bị đổi theo từng loại thay đổi trạng thái */
+  function rbFor(reason) {
+    const res = rbEl(els.fResults, 'Kết quả');
+    if (reason === 'time') {
+      const typing = document.activeElement === els.tInput;
+      rb(typing ? null : rbEl($('.time-val', els.fTime), 'Thời gian', { veil: VEIL_CTRL }),
+        rbEl(els.ruleNote, 'Quy tắc ½', { veil: VEIL_CTRL }), res);
+    } else if (reason === 'needs') rb(res);
+    else if (reason === 'origin') rb(rbEl($('.select', els.fWhere), getOrigin().short, { veil: VEIL_CTRL }), res, rbMap('Vị trí của bạn'));
+    else if (reason === 'ktx') rb(state.inKtx ? rbEl(els.ktxWrap, 'Tòa KTX', { veil: VEIL_CTRL }) : null, res);
+    else if (reason === 'filter') rb(rbEl(els.list, 'Kết quả'));     // không phủ ô tìm kiếm khi đang gõ
   }
 
   /* ── vị trí hiện tại & KTX ─────────────────────────── */
@@ -429,15 +471,18 @@
     if (reason === 'origin') clearRoute();
     const animate = reason !== 'filter';
     render(animate);
+    rbFor(reason);
     if (animate) scheduleNodes();
     else revealAllMarkers(false);
   }
 
   /* ── Swarm nodes: con trỏ bay tới các khu vực tìm được ── */
-  let nodesTimer = 0, lastSig = '';
+  let nodesTimer = 0, nodesTok = 0, lastSig = '';
   function scheduleNodes(delay) {
     clearTimeout(nodesTimer);
-    nodesTimer = setTimeout(() => runNodes(false), delay == null ? 650 : delay);
+    const tok = ++nodesTok;
+    // dựng lại giao diện xong rồi bầy mới bay ra bản đồ
+    nodesTimer = setTimeout(() => swarm.whenIdle(1800).then(() => { if (tok === nodesTok) runNodes(false); }), delay == null ? 650 : delay);
   }
   function nodeXY(p) {
     const s = toScreen(p);
@@ -548,6 +593,8 @@
       if (sheet.state === 'peek') setSheet('half');
     } else if (panelMin) restorePanel();
     if (opts.fly !== false) panToVisible([r.p.lat, r.p.lng], Math.max(map.getZoom(), 17));
+    const name = r.p.short || r.p.name;
+    rb(rbEl(els.viewDetail, name), rbEl(mkEl(id), name, { veil: VEIL_CTRL }));
   }
 
   function closeDetail() {
@@ -557,6 +604,7 @@
     els.viewSearch.hidden = false;
     updateMarkerActive();
     $$('.card.is-active', els.list).forEach((c) => c.classList.remove('is-active'));
+    rb(rbEl(els.viewSearch, 'Tìm chỗ nghỉ'));
   }
 
   /* ── Chỉ đường (đi bộ, OSRM foot) ──────────────────── */
@@ -610,6 +658,9 @@
     els.routeChip.hidden = false;
     if (isMobile()) setSheet('peek');
     setTimeout(() => fitVisible(L.latLngBounds(coords), 18), isMobile() ? 120 : 0);
+    rb(rbEl($('#routeBox', els.viewDetail), 'Tuyến đường'),
+      rbEl(els.routeChip, state.route.name, { veil: VEIL_CTRL }),
+      rbMap('Tuyến đi bộ'));
   }
 
   function renderRouteBox() {
@@ -673,6 +724,7 @@
     els.panel.classList.add('is-min');
     els.fab.hidden = false;
     applySheet();
+    rb(rbEl(els.fab, 'Tìm chỗ nghỉ', { veil: VEIL_CTRL }));
   }
   function restorePanel() {
     panelMin = false;
@@ -680,6 +732,13 @@
     els.fab.hidden = true;
     if (isMobile() && sheet.state === 'peek' && state.selected) sheet.state = 'half';
     applySheet();
+    rb(rbEl(els.panel, 'Bảng tìm kiếm'));
+  }
+  /** người dùng tự đổi nấc bottom sheet */
+  function userSetSheet(s) {
+    const changed = s !== sheet.state;
+    setSheet(s);
+    if (changed) rb(rbEl(els.panel, 'Bảng tìm kiếm'));
   }
 
   let drag = null;
@@ -704,7 +763,7 @@
     drag = null;
     els.panel.classList.remove('is-dragging');
     const order = ['peek', 'half', 'full'];
-    if (!d.moved) { setSheet(order[(order.indexOf(sheet.state) + 1) % 3]); return; }
+    if (!d.moved) { userSetSheet(order[(order.indexOf(sheet.state) + 1) % 3]); return; }
     const dy = e.clientY - d.y0;
     const v = dy / Math.max(1, performance.now() - d.t0);
     const H = sheetHeights(), h = d.h0 - dy;
@@ -713,7 +772,7 @@
     let idx = hs.reduce((bi, hv, i) => (Math.abs(hv - h) < Math.abs(hs[bi] - h) ? i : bi), 0);
     if (v < -0.45) { const j = hs.findIndex((hv) => hv > h + 10); idx = j === -1 ? 2 : j; }
     else if (v > 0.45) { let j = -1; hs.forEach((hv, i) => { if (hv < h - 10) j = i; }); if (j === -1) { minimizePanel(); return; } idx = j; }
-    setSheet(order[idx]);
+    userSetSheet(order[idx]);
   }
   [els.grip, els.head].forEach((el) => {
     el.addEventListener('pointerdown', dragStart);
@@ -722,7 +781,7 @@
     el.addEventListener('pointercancel', dragEnd);
   });
   els.grip.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSheet(sheet.state === 'full' ? 'peek' : sheet.state === 'peek' ? 'half' : 'full'); }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); userSetSheet(sheet.state === 'full' ? 'peek' : sheet.state === 'peek' ? 'half' : 'full'); }
   });
 
   /* ── Chọn vị trí trên bản đồ / GPS ─────────────────── */
@@ -733,12 +792,14 @@
     els.map.classList.add('is-picking');
     els.btnPick.classList.add('is-on');
     if (isMobile()) setSheet('peek');
+    rb(rbEl(els.pickBanner, 'Chọn vị trí', { veil: VEIL_CTRL }));
   }
   function stopPick() {
     picking = false;
     els.pickBanner.hidden = true;
     els.map.classList.remove('is-picking');
     els.btnPick.classList.remove('is-on');
+    rb(rbEl(els.btnPick, null, { veil: VEIL_CTRL }));
   }
   function nearestNamed(lat, lng) {
     let best = null, bd = 70;
@@ -746,20 +807,49 @@
     for (const p of cands) { const d = distM({ lat, lng }, p); if (d < bd) { bd = d; best = p; } }
     return best;
   }
-  function setCustomOrigin(lat, lng, src) {
+  /** quiet: chỉ cập nhật trạng thái (dùng khi đoạn mở màn chưa xong — nó sẽ tự đặt node từ vị trí mới). */
+  function setCustomOrigin(lat, lng, src, quiet) {
     const far = distM({ lat, lng }, D.center);
-    if (far > 3000) { toast('Vị trí cách Bách Khoa ' + fmtDist(far) + ' — ngoài phạm vi, giữ vị trí cũ.'); return; }
+    if (far > 3000) {
+      toast('Bạn đang cách Bách Khoa ' + fmtDist(far) + ' — ngoài phạm vi, tạm dùng ' + getOrigin().short + '.', 4500);
+      return false;
+    }
     const near = nearestNamed(lat, lng);
-    const base = src === 'gps' ? 'Vị trí GPS' : 'Điểm đã chọn';
+    const base = src === 'gps' ? 'Vị trí hiện tại' : 'Điểm đã chọn';
     state.custom = {
       lat, lng,
       label: near ? base + ' · gần ' + (near.short || near.name) : base,
-      short: near ? 'gần ' + (near.short || near.name) : (src === 'gps' ? 'vị trí GPS' : 'điểm đã chọn'),
+      short: near ? 'gần ' + (near.short || near.name) : (src === 'gps' ? 'vị trí hiện tại' : 'điểm đã chọn'),
     };
     state.originId = 'custom';
     buildOriginSelect();
-    onChange('origin');
-    panToVisible([lat, lng], Math.max(map.getZoom(), 17));
+    if (quiet) {
+      clearRoute();
+      render(true);
+      panToVisible([lat, lng], Math.max(map.getZoom(), 17), mapShown ? undefined : false);
+    } else {
+      onChange('origin');
+      panToVisible([lat, lng], Math.max(map.getZoom(), 17));
+    }
+    return true;
+  }
+
+  /** Mở trang là hỏi vị trí luôn; không được thì dùng tòa đã chọn lần trước (mặc định D3). */
+  function locateOnStart() {
+    if (!navigator.geolocation) return;
+    toast('Đang xác định vị trí của bạn…', 8000);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (setCustomOrigin(pos.coords.latitude, pos.coords.longitude, 'gps', !introDone)) {
+          toast('Đã dùng vị trí hiện tại của bạn (' + state.custom.short + ').');
+        }
+      },
+      (err) => {
+        const using = 'đang dùng ' + getOrigin().short + '. Bạn có thể chọn tòa trong danh sách hoặc chạm bản đồ.';
+        toast(err.code === 1 ? 'Chưa được phép truy cập vị trí — ' + using : 'Không lấy được vị trí — ' + using, 5000);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 }
+    );
   }
 
   function buildOriginSelect() {
@@ -777,6 +867,36 @@
   els.ktxSel.innerHTML = D.dorms.map((d) => '<option value="' + d.id + '">' + esc(d.name) + '</option>').join('');
 
   /* ── Sự kiện ───────────────────────────────────────── */
+  // Bấm bất kỳ nút nào → con trỏ gần nhất dựng lại chính nút đó.
+  // Đăng ký ở pha capture để nút được chọn con trỏ trước các vùng mà handler của nó dựng lại;
+  // việc đo vị trí diễn ra sau khi handler chạy xong, nên nút bị ẩn đi sau khi bấm sẽ tự bỏ qua.
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('button, [role="button"]');
+    if (!b || b.dataset.rb === 'off' || b.closest('#swarm, .leaflet-container')) return;
+    rb(rbEl(b, null, { veil: VEIL_CTRL, delay: 0 }));
+  }, true);
+  // Ô chọn / công tắc đổi giá trị → dựng lại ô đó
+  document.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.tagName === 'SELECT') {
+      const o = t.options[t.selectedIndex];
+      rb(rbEl(t.closest('.select') || t, o ? o.text : null, { veil: VEIL_CTRL, delay: 0 }));
+    } else if (t.type === 'checkbox') {
+      const row = t.closest('.switch-row');
+      rb(rbEl(row || t, row ? $('b', row).textContent : null, { veil: VEIL_CTRL, delay: 0 }));
+    }
+  }, true);
+
+  function clearNeeds() {
+    state.needs.clear();
+    rb(rbEl(els.needs, 'Nhu cầu'));
+    onChange('needs');
+  }
+  function userClearRoute() {
+    clearRoute();
+    rb(rbMap('Xóa tuyến'));
+  }
+
   function setT(v, fromInput) {
     const T = clamp(Math.round(Number(v)) || 1, 1, 240);
     if (T === state.T && !fromInput) return;
@@ -798,7 +918,7 @@
     if (state.needs.has(id)) state.needs.delete(id); else state.needs.add(id);
     onChange('needs');
   });
-  els.needsClear.addEventListener('click', () => { state.needs.clear(); onChange('needs'); });
+  els.needsClear.addEventListener('click', clearNeeds);
 
   els.where.addEventListener('change', () => { state.originId = els.where.value; onChange('origin'); panToVisible([getOrigin().lat, getOrigin().lng]); });
   els.ktx.checked = state.inKtx;
@@ -820,19 +940,6 @@
     qT = setTimeout(() => { state.q = els.q.value; onChange('filter'); }, 120);
   });
 
-  els.btnGps.addEventListener('click', () => {
-    if (!navigator.geolocation) { toast('Thiết bị không hỗ trợ định vị.'); return; }
-    els.btnGps.classList.add('is-busy');
-    toast('Đang lấy vị trí của bạn…');
-    navigator.geolocation.getCurrentPosition(
-      (pos) => { els.btnGps.classList.remove('is-busy'); setCustomOrigin(pos.coords.latitude, pos.coords.longitude, 'gps'); },
-      (err) => {
-        els.btnGps.classList.remove('is-busy');
-        toast(err.code === 1 ? 'Bạn chưa cho phép truy cập vị trí. Hãy chọn tòa trong danh sách hoặc chạm bản đồ.' : 'Không lấy được vị trí, thử lại sau.');
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
-    );
-  });
   els.btnPick.addEventListener('click', () => (picking ? stopPick() : startPick()));
   els.pickCancel.addEventListener('click', stopPick);
 
@@ -848,8 +955,12 @@
   els.list.addEventListener('click', (e) => {
     const a = e.target.closest('[data-act]');
     if (a) {
-      if (a.dataset.act === 'clear-needs') { state.needs.clear(); onChange('needs'); }
-      else if (a.dataset.act === 'clear-q') { els.q.value = ''; state.q = ''; onChange('filter'); }
+      if (a.dataset.act === 'clear-needs') clearNeeds();
+      else if (a.dataset.act === 'clear-q') {
+        els.q.value = ''; state.q = '';
+        rb(rbEl($('.searchbox', els.fResults), 'Lọc theo tên', { veil: VEIL_CTRL }));
+        onChange('filter');
+      }
       else if (a.dataset.act === 'time') setT(a.dataset.t);
       return;
     }
@@ -869,23 +980,27 @@
     const act = a.dataset.act;
     if (act === 'back') closeDetail();
     else if (act === 'route') showRoute(state.selected);
-    else if (act === 'clear-route') clearRoute();
+    else if (act === 'clear-route') userClearRoute();
     else if (act === 'focus') {
       const r = rowFor(state.selected);
-      if (r) { if (isMobile()) setSheet('peek'); setTimeout(() => panToVisible([r.p.lat, r.p.lng], 18), 50); }
+      if (r) {
+        if (isMobile()) setSheet('peek');
+        setTimeout(() => panToVisible([r.p.lat, r.p.lng], 18), 50);
+        rb(rbMap(r.p.short || r.p.name));
+      }
     }
   });
 
   els.routeChipMain.addEventListener('click', () => { if (state.route) openDetail(state.route.id, { fly: false }); });
-  els.routeChipX.addEventListener('click', clearRoute);
+  els.routeChipX.addEventListener('click', userClearRoute);
 
   els.btnMin.addEventListener('click', minimizePanel);
   els.fab.addEventListener('click', restorePanel);
 
-  els.zIn.addEventListener('click', () => map.zoomIn());
-  els.zOut.addEventListener('click', () => map.zoomOut());
-  els.cHome.addEventListener('click', () => panToVisible([D.center.lat, D.center.lng], 17));
-  els.cMe.addEventListener('click', () => { const o = getOrigin(); panToVisible([o.lat, o.lng], 18); });
+  els.zIn.addEventListener('click', () => { map.zoomIn(); rb(rbMap('Phóng to')); });
+  els.zOut.addEventListener('click', () => { map.zoomOut(); rb(rbMap('Thu nhỏ')); });
+  els.cHome.addEventListener('click', () => { panToVisible([D.center.lat, D.center.lng], 17); rb(rbMap('Khuôn viên')); });
+  els.cMe.addEventListener('click', () => { const o = getOrigin(); panToVisible([o.lat, o.lng], 18); rb(rbMap(o.short)); });
   els.cSwarm.addEventListener('click', () => {
     const on = !swarm.enabled;
     swarm.setEnabled(on);
@@ -893,7 +1008,12 @@
     els.cSwarm.classList.toggle('is-on', on);
     els.cSwarm.setAttribute('aria-pressed', String(on));
     if (!on) { revealEverything(); revealAllMarkers(false); }
-    else runNodes(true);
+    else {
+      // bật lại: bầy dựng lại toàn bộ giao diện rồi mới bay ra các node
+      rb(panelMin ? rbEl(els.fab, 'Tìm chỗ nghỉ', { veil: VEIL_CTRL }) : rbEl(els.panel, 'Bảng tìm kiếm'),
+        rbEl(els.mapCtrl, 'Điều khiển', { veil: VEIL_CTRL }), rbMap());
+      swarm.whenIdle(2500).then(() => runNodes(true));
+    }
     toast(on ? 'Đã bật hiệu ứng Swarm.' : 'Đã tắt hiệu ứng Swarm.');
   });
 
@@ -941,8 +1061,10 @@
     $$('.is-unbuilt').forEach((el) => { if (el !== els.map) built(el); });
   }
 
+  let introDone = false;
   async function intro() {
     if (!swarm.enabled) {
+      introDone = true;
       revealEverything();
       revealAllMarkers(true);
       return;
@@ -964,6 +1086,7 @@
     ]);
     clearTimeout(failsafe);
     revealEverything();
+    introDone = true;
     setTimeout(() => runNodes(true), 250);
   }
 
@@ -982,4 +1105,5 @@
   }
   panToVisible([D.center.lat, D.center.lng], 17, false);
   requestAnimationFrame(() => setTimeout(intro, 150));
+  locateOnStart();
 })();

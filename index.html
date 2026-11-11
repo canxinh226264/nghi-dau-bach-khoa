@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Nghỉ đâu Bách Khoa</title>
+  <meta name="description" content="Tìm chỗ nghỉ ngơi trong giờ trống quanh Đại học Bách khoa Hà Nội, theo thời gian rảnh và nhu cầu.">
+  <meta name="theme-color" content="#c8102e">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23c8102e'/%3E%3Cpath d='M22.5 18.6A7.5 7.5 0 1 1 13.4 9.5a5.8 5.8 0 0 0 9.1 9.1z' fill='none' stroke='white' stroke-width='2.4' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Bản đồ toàn màn hình -->
+  <div id="map" class="map is-unbuilt" role="application" aria-label="Bản đồ khu vực Đại học Bách khoa Hà Nội"></div>
+
+  <!-- Bảng tìm kiếm nằm ngay trên bản đồ (desktop: thẻ nổi bên trái · điện thoại: bottom sheet) -->
+  <aside id="panel" class="panel is-unbuilt" data-sheet="peek" aria-label="Tìm chỗ nghỉ">
+    <div class="sheet-grip" id="grip" role="button" tabindex="0" aria-label="Kéo hoặc chạm để mở rộng / thu gọn"><span></span></div>
+
+    <header class="panel-head is-unbuilt" id="head" data-build="Tiêu đề">
+      <div class="logo" aria-hidden="true"><i data-icon="moon"></i></div>
+      <div class="brand">
+        <h1>Nghỉ đâu Bách Khoa?</h1>
+        <p id="brandSub">Chỗ nghỉ trong giờ trống · bán kính 2 km</p>
+      </div>
+      <button class="icon-btn ghost" id="btnMin" type="button" aria-label="Thu gọn bảng" title="Thu gọn thành nút"><i data-icon="collapse"></i></button>
+    </header>
+
+    <div class="panel-scroll" id="scroll">
+      <section class="view" id="viewSearch">
+        <!-- Thời gian rảnh -->
+        <div class="field is-unbuilt" id="fTime" data-build="Thời gian rảnh">
+          <div class="field-head">
+            <span class="field-label"><i data-icon="clock"></i>Bạn rảnh bao lâu?</span>
+            <span class="pill" id="ruleNote"></span>
+          </div>
+          <div class="time-row">
+            <button class="step" id="tMinus" type="button" aria-label="Bớt thời gian"><i data-icon="minus"></i></button>
+            <label class="time-val">
+              <input id="tInput" type="number" inputmode="numeric" min="1" max="240" aria-label="Số phút rảnh">
+              <span>phút</span>
+            </label>
+            <button class="step" id="tPlus" type="button" aria-label="Thêm thời gian"><i data-icon="plus"></i></button>
+          </div>
+          <input type="range" id="tRange" class="range" min="1" max="180" step="1" aria-label="Kéo để chọn số phút rảnh">
+          <div class="chips scroll-x" id="tChips" role="group" aria-label="Chọn nhanh"></div>
+        </div>
+
+        <!-- Nhu cầu -->
+        <div class="field is-unbuilt" id="fNeeds" data-build="Nhu cầu">
+          <div class="field-head">
+            <span class="field-label"><i data-icon="sparkle"></i>Bạn cần gì?</span>
+            <button class="link" id="needsClear" type="button" hidden>Bỏ chọn</button>
+          </div>
+          <div class="needs scroll-x" id="needs" role="group" aria-label="Nhu cầu"></div>
+        </div>
+
+        <!-- Vị trí hiện tại + KTX -->
+        <div class="field is-unbuilt" id="fWhere" data-build="Vị trí">
+          <div class="field-head">
+            <span class="field-label"><i data-icon="pin"></i>Bạn đang ở đâu?</span>
+          </div>
+          <div class="where-row">
+            <div class="select">
+              <select id="where" aria-label="Vị trí hiện tại"></select>
+              <i data-icon="chev"></i>
+            </div>
+            <button class="icon-btn" id="btnGps" type="button" aria-label="Dùng vị trí GPS" title="Dùng GPS"><i data-icon="locate"></i></button>
+            <button class="icon-btn" id="btnPick" type="button" aria-label="Chọn vị trí trên bản đồ" title="Chạm bản đồ để chọn"><i data-icon="tap"></i></button>
+          </div>
+          <label class="switch-row" for="ktx">
+            <span class="switch-txt"><b>Mình đang ở ký túc xá</b><small>Thêm lựa chọn về phòng KTX nghỉ</small></span>
+            <input type="checkbox" id="ktx" role="switch">
+            <span class="switch" aria-hidden="true"></span>
+          </label>
+          <div class="select ktx-sel" id="ktxWrap" hidden>
+            <select id="ktxSel" aria-label="Tòa KTX của bạn"></select>
+            <i data-icon="chev"></i>
+          </div>
+        </div>
+
+        <!-- Kết quả -->
+        <div class="results is-unbuilt" id="fResults" data-build="Kết quả">
+          <div class="results-head">
+            <h2 id="resTitle">Đang tìm…</h2>
+            <span class="res-sub" id="resSub"></span>
+          </div>
+          <label class="searchbox">
+            <i data-icon="search"></i>
+            <input id="q" type="search" placeholder="Lọc theo tên: D3, cà phê, hồ…" autocomplete="off" aria-label="Lọc kết quả theo tên">
+          </label>
+          <div id="advice"></div>
+          <ul class="list" id="list"></ul>
+        </div>
+      </section>
+
+      <section class="view view-detail" id="viewDetail" hidden aria-live="polite"></section>
+    </div>
+  </aside>
+
+  <!-- Điều khiển bản đồ -->
+  <div class="map-ctrl is-unbuilt" id="mapCtrl" data-build="Điều khiển">
+    <div class="ctrl-group">
+      <button class="ctrl" id="zIn" type="button" aria-label="Phóng to"><i data-icon="plus"></i></button>
+      <button class="ctrl" id="zOut" type="button" aria-label="Thu nhỏ"><i data-icon="minus"></i></button>
+    </div>
+    <div class="ctrl-group">
+      <button class="ctrl" id="cHome" type="button" aria-label="Về khuôn viên Bách Khoa" title="Về khuôn viên"><i data-icon="home"></i></button>
+      <button class="ctrl" id="cMe" type="button" aria-label="Về vị trí của bạn" title="Vị trí của bạn"><i data-icon="locate"></i></button>
+      <button class="ctrl is-on" id="cSwarm" type="button" aria-pressed="true" aria-label="Bật/tắt hiệu ứng Swarm" title="Hiệu ứng Swarm"><i data-icon="sparkle"></i></button>
+    </div>
+  </div>
+
+  <!-- Nút gọn khi thu nhỏ bảng -->
+  <button class="fab" id="fab" type="button" hidden aria-label="Mở bảng tìm chỗ nghỉ">
+    <i data-icon="search"></i><span>Tìm chỗ nghỉ</span><b class="fab-count" id="fabCount">0</b>
+  </button>
+
+  <!-- Tuyến đường đang hiển thị -->
+  <div class="route-chip" id="routeChip" hidden>
+    <button type="button" class="route-chip-main" id="routeChipMain"></button>
+    <button type="button" class="route-chip-x" id="routeChipX" aria-label="Xóa chỉ đường"><i data-icon="x"></i></button>
+  </div>
+
+  <div class="pick-banner" id="pickBanner" hidden>
+    <i data-icon="tap"></i><span>Chạm vào bản đồ để đặt vị trí của bạn</span>
+    <button type="button" id="pickCancel">Hủy</button>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div id="swarm" aria-hidden="true"></div>
+
+  <noscript><div class="noscript">Trang cần bật JavaScript để hiển thị bản đồ.</div></noscript>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="js/icons.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/swarm.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

@@ -147,17 +147,20 @@
     });
   }
 
-  /* ── Swarm rebuild: thao tác nào đổi trạng thái thì bầy con trỏ "dựng lại" phần đó ── */
-  const VEIL_CTRL = 0.5, VEIL_AREA = 0.72;
+  /* ── Swarm rebuild: thao tác nào đổi trạng thái thì bầy con trỏ "dựng lại" phần đó ──
+   * Phần bị đổi biến mất hẳn rồi được dựng lại như lúc mở trang, theo đúng các mục có data-build
+   * (Tiêu đề, Thời gian rảnh, Nhu cầu, Vị trí, Kết quả, Điều khiển). */
   function labelOf(el) {
     const b = el.querySelector('b');
     const s = el.dataset.build || el.getAttribute('aria-label') || el.title || (b && b.textContent) || el.textContent;
     return String(s || '').replace(/\s+/g, ' ').trim().slice(0, 28);
   }
+  /** mục (data-build) chứa phần tử; ngoài các mục đó thì là chính phần tử */
+  const section = (el) => (el && el.closest('[data-build]')) || el;
   /** mục tiêu: một phần tử giao diện */
   function rbEl(el, label, o) {
     if (!el) return null;
-    return Object.assign({ el, label: label || labelOf(el), veil: VEIL_AREA, delay: 60 }, o);
+    return Object.assign({ el, label: label || labelOf(el), delay: 60 }, o);
   }
   /** mục tiêu: vùng bản đồ đang nhìn thấy (không bị bảng/điều khiển che) */
   function rbMap(label) {
@@ -169,23 +172,35 @@
       },
     };
   }
+  const clip = (t) => { if (t && t.el && !t.clipEl && els.scroll.contains(t.el)) t.clipEl = els.scroll; return t; };
   function rb() {
     if (!swarm.enabled) return;
-    const list = Array.prototype.filter.call(arguments, Boolean);
-    list.forEach((t) => { if (t.el && !t.clipEl && els.scroll.contains(t.el)) t.clipEl = els.scroll; });
-    swarm.rebuild(list);
+    swarm.rebuild(Array.prototype.filter.call(arguments, Boolean).map(clip));
   }
-  /** các phần bị đổi theo từng loại thay đổi trạng thái */
-  function rbFor(reason) {
-    const res = rbEl(els.fResults, 'Kết quả');
-    if (reason === 'time') {
-      const typing = document.activeElement === els.tInput;
-      rb(typing ? null : rbEl($('.time-val', els.fTime), 'Thời gian', { veil: VEIL_CTRL }),
-        rbEl(els.ruleNote, 'Quy tắc ½', { veil: VEIL_CTRL }), res);
-    } else if (reason === 'needs') rb(res);
-    else if (reason === 'origin') rb(rbEl($('.select', els.fWhere), getOrigin().short, { veil: VEIL_CTRL }), res, rbMap('Vị trí của bạn'));
-    else if (reason === 'ktx') rb(state.inKtx ? rbEl(els.ktxWrap, 'Tòa KTX', { veil: VEIL_CTRL }) : null, res);
-    else if (reason === 'filter') rb(rbEl(els.list, 'Kết quả'));     // không phủ ô tìm kiếm khi đang gõ
+  /** dựng theo đợt — đợt sau chờ đợt trước */
+  function rbWaves(waves) {
+    if (!swarm.enabled) return;
+    swarm.rebuildWaves(waves.map((w) => w.filter(Boolean).map(clip)));
+  }
+  /** cả bảng thay đổi: dựng khung bảng trước rồi tới từng mục, y như lúc mở trang */
+  function rbPanelWaves() {
+    const kids = state.selected
+      ? [els.head, els.viewDetail]
+      : [els.head, els.fTime, els.fNeeds, els.fWhere, els.fResults];
+    return [
+      [rbEl(els.panel, 'Bảng tìm kiếm', { delay: 0 })],
+      kids.map((el) => rbEl(el, el === els.viewDetail ? 'Chi tiết' : null, { delay: 220 })),
+    ];
+  }
+  /** các mục bị đổi theo từng loại thay đổi trạng thái.
+   *  live: đang kéo thanh thời gian / gõ số phút → chưa dựng lại mục Thời gian (để không mất thứ đang thao tác) */
+  function rbFor(reason, live) {
+    const res = rbEl(els.fResults);
+    if (reason === 'time') rb(live ? null : rbEl(els.fTime), res);
+    else if (reason === 'needs') rb(rbEl(els.fNeeds), res);
+    else if (reason === 'origin') rb(rbEl(els.fWhere), res, rbMap('Vị trí của bạn'));
+    else if (reason === 'ktx') rb(rbEl(els.fWhere), res);
+    else if (reason === 'filter') rb(rbEl(els.list, 'Kết quả'));     // không làm mất ô tìm kiếm khi đang gõ
   }
 
   /* ── vị trí hiện tại & KTX ─────────────────────────── */
@@ -465,13 +480,13 @@
     }, 300);
   }
 
-  /** reason: 'time' | 'needs' | 'origin' | 'ktx' | 'filter' */
-  function onChange(reason) {
+  /** reason: 'time' | 'needs' | 'origin' | 'ktx' | 'filter'; live: đang kéo / gõ liên tục */
+  function onChange(reason, live) {
     persist();
     if (reason === 'origin') clearRoute();
     const animate = reason !== 'filter';
     render(animate);
-    rbFor(reason);
+    rbFor(reason, live);
     if (animate) scheduleNodes();
     else revealAllMarkers(false);
   }
@@ -594,7 +609,7 @@
     } else if (panelMin) restorePanel();
     if (opts.fly !== false) panToVisible([r.p.lat, r.p.lng], Math.max(map.getZoom(), 17));
     const name = r.p.short || r.p.name;
-    rb(rbEl(els.viewDetail, name), rbEl(mkEl(id), name, { veil: VEIL_CTRL }));
+    rb(rbEl(els.viewDetail, name), rbEl(mkEl(id), name));
   }
 
   function closeDetail() {
@@ -604,7 +619,8 @@
     els.viewSearch.hidden = false;
     updateMarkerActive();
     $$('.card.is-active', els.list).forEach((c) => c.classList.remove('is-active'));
-    rb(rbEl(els.viewSearch, 'Tìm chỗ nghỉ'));
+    // quay lại màn tìm kiếm: dựng lại từng mục như lúc mở trang
+    rb(rbEl(els.fTime), rbEl(els.fNeeds), rbEl(els.fWhere), rbEl(els.fResults));
   }
 
   /* ── Chỉ đường (đi bộ, OSRM foot) ──────────────────── */
@@ -659,7 +675,7 @@
     if (isMobile()) setSheet('peek');
     setTimeout(() => fitVisible(L.latLngBounds(coords), 18), isMobile() ? 120 : 0);
     rb(rbEl($('#routeBox', els.viewDetail), 'Tuyến đường'),
-      rbEl(els.routeChip, state.route.name, { veil: VEIL_CTRL }),
+      rbEl(els.routeChip, state.route.name),
       rbMap('Tuyến đi bộ'));
   }
 
@@ -724,7 +740,7 @@
     els.panel.classList.add('is-min');
     els.fab.hidden = false;
     applySheet();
-    rb(rbEl(els.fab, 'Tìm chỗ nghỉ', { veil: VEIL_CTRL }));
+    rb(rbEl(els.fab, 'Tìm chỗ nghỉ'));
   }
   function restorePanel() {
     panelMin = false;
@@ -732,13 +748,13 @@
     els.fab.hidden = true;
     if (isMobile() && sheet.state === 'peek' && state.selected) sheet.state = 'half';
     applySheet();
-    rb(rbEl(els.panel, 'Bảng tìm kiếm'));
+    rbWaves(rbPanelWaves());
   }
   /** người dùng tự đổi nấc bottom sheet */
   function userSetSheet(s) {
     const changed = s !== sheet.state;
     setSheet(s);
-    if (changed) rb(rbEl(els.panel, 'Bảng tìm kiếm'));
+    if (changed) rbWaves(rbPanelWaves());
   }
 
   let drag = null;
@@ -792,14 +808,14 @@
     els.map.classList.add('is-picking');
     els.btnPick.classList.add('is-on');
     if (isMobile()) setSheet('peek');
-    rb(rbEl(els.pickBanner, 'Chọn vị trí', { veil: VEIL_CTRL }));
+    rb(rbEl(els.pickBanner, 'Chọn vị trí'));
   }
   function stopPick() {
     picking = false;
     els.pickBanner.hidden = true;
     els.map.classList.remove('is-picking');
     els.btnPick.classList.remove('is-on');
-    rb(rbEl(els.btnPick, null, { veil: VEIL_CTRL }));
+    rb(rbEl(section(els.btnPick)));
   }
   function nearestNamed(lat, lng) {
     let best = null, bd = 70;
@@ -867,29 +883,23 @@
   els.ktxSel.innerHTML = D.dorms.map((d) => '<option value="' + d.id + '">' + esc(d.name) + '</option>').join('');
 
   /* ── Sự kiện ───────────────────────────────────────── */
-  // Bấm bất kỳ nút nào → con trỏ gần nhất dựng lại chính nút đó.
-  // Đăng ký ở pha capture để nút được chọn con trỏ trước các vùng mà handler của nó dựng lại;
-  // việc đo vị trí diễn ra sau khi handler chạy xong, nên nút bị ẩn đi sau khi bấm sẽ tự bỏ qua.
+  // Bấm bất kỳ nút nào → con trỏ gần nhất dựng lại mục chứa nút đó (nút ngoài các mục thì dựng lại chính nó).
+  // Đăng ký ở pha capture để mục này được chọn con trỏ trước các vùng mà handler dựng lại;
+  // việc đo vị trí diễn ra sau khi handler chạy xong, nên phần bị ẩn đi sau khi bấm sẽ tự bỏ qua.
   document.addEventListener('click', (e) => {
     const b = e.target.closest('button, [role="button"]');
     if (!b || b.dataset.rb === 'off' || b.closest('#swarm, .leaflet-container')) return;
-    rb(rbEl(b, null, { veil: VEIL_CTRL, delay: 0 }));
+    rb(rbEl(section(b), null, { delay: 0 }));
   }, true);
-  // Ô chọn / công tắc đổi giá trị → dựng lại ô đó
+  // Ô chọn / công tắc / thanh kéo / ô số đổi giá trị (thả tay, rời ô) → dựng lại mục chứa nó
   document.addEventListener('change', (e) => {
     const t = e.target;
-    if (t.tagName === 'SELECT') {
-      const o = t.options[t.selectedIndex];
-      rb(rbEl(t.closest('.select') || t, o ? o.text : null, { veil: VEIL_CTRL, delay: 0 }));
-    } else if (t.type === 'checkbox') {
-      const row = t.closest('.switch-row');
-      rb(rbEl(row || t, row ? $('b', row).textContent : null, { veil: VEIL_CTRL, delay: 0 }));
-    }
+    if (t.type === 'search') return;
+    if (t.matches('select, input')) rb(rbEl(section(t), null, { delay: 0 }));
   }, true);
 
   function clearNeeds() {
     state.needs.clear();
-    rb(rbEl(els.needs, 'Nhu cầu'));
     onChange('needs');
   }
   function userClearRoute() {
@@ -897,16 +907,17 @@
     rb(rbMap('Xóa tuyến'));
   }
 
-  function setT(v, fromInput) {
+  /** live: đang kéo thanh / gõ số — mục Thời gian để yên tới khi thả tay hoặc rời ô */
+  function setT(v, live) {
     const T = clamp(Math.round(Number(v)) || 1, 1, 240);
-    if (T === state.T && !fromInput) return;
+    if (T === state.T) return;
     state.T = T;
-    onChange('time');
+    onChange('time', live);
   }
   els.tMinus.addEventListener('click', () => setT(state.T - (state.T <= 10 ? 1 : 5)));
   els.tPlus.addEventListener('click', () => setT(state.T + (state.T < 10 ? 1 : 5)));
-  els.tRange.addEventListener('input', () => setT(els.tRange.value));
-  els.tInput.addEventListener('input', () => { const v = Number(els.tInput.value); if (v >= 1) setT(v); });
+  els.tRange.addEventListener('input', () => setT(els.tRange.value, true));
+  els.tInput.addEventListener('input', () => { const v = Number(els.tInput.value); if (v >= 1) setT(v, true); });
   els.tInput.addEventListener('change', () => { els.tInput.value = state.T; });
   els.tInput.addEventListener('blur', () => { els.tInput.value = state.T; });
   els.tChips.addEventListener('click', (e) => { const c = e.target.closest('.chip'); if (c) setT(c.dataset.t); });
@@ -958,7 +969,6 @@
       if (a.dataset.act === 'clear-needs') clearNeeds();
       else if (a.dataset.act === 'clear-q') {
         els.q.value = ''; state.q = '';
-        rb(rbEl($('.searchbox', els.fResults), 'Lọc theo tên', { veil: VEIL_CTRL }));
         onChange('filter');
       }
       else if (a.dataset.act === 'time') setT(a.dataset.t);
@@ -1009,10 +1019,11 @@
     els.cSwarm.setAttribute('aria-pressed', String(on));
     if (!on) { revealEverything(); revealAllMarkers(false); }
     else {
-      // bật lại: bầy dựng lại toàn bộ giao diện rồi mới bay ra các node
-      rb(panelMin ? rbEl(els.fab, 'Tìm chỗ nghỉ', { veil: VEIL_CTRL }) : rbEl(els.panel, 'Bảng tìm kiếm'),
-        rbEl(els.mapCtrl, 'Điều khiển', { veil: VEIL_CTRL }), rbMap());
-      swarm.whenIdle(2500).then(() => runNodes(true));
+      // bật lại: bầy dựng lại toàn bộ giao diện như lúc mở trang rồi mới bay ra các node
+      const waves = panelMin ? [[rbEl(els.fab, 'Tìm chỗ nghỉ', { delay: 0 })]] : rbPanelWaves();
+      waves[0].push(rbEl(els.mapCtrl, null, { delay: 0 }), rbMap());
+      rbWaves(waves);
+      swarm.whenIdle(4000).then(() => runNodes(true));
     }
     toast(on ? 'Đã bật hiệu ứng Swarm.' : 'Đã tắt hiệu ứng Swarm.');
   });

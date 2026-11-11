@@ -1,7 +1,7 @@
 /* Swarm Rebuild — một bầy con trỏ chuột:
  *  1) build(): bay vào, kéo khung chọn và "dựng" từng phần giao diện; chỉ vào bản đồ để bản đồ hiện ra
- *  2) rebuild(): mỗi khi trạng thái đổi — phần bị đổi mờ đi, con trỏ gần nhất bay tới kéo khung chọn
- *     và phần đó hiện rõ lại đúng theo khung đang kéo
+ *  2) rebuild() / rebuildWaves(): mỗi khi trạng thái đổi — phần bị đổi biến mất như lúc chưa dựng,
+ *     con trỏ gần nhất bay tới kéo khung chọn, xong khung thì phần đó hiện ra lại (giống lúc mở trang)
  *  3) showNodes(): bay tới các khu vực tìm được, gắn nhãn (node) và nối về vị trí của bạn
  *  4) lúc rảnh: bám theo chuột; chuột đứng yên → xếp thành vòng tròn quanh chuột
  *     điện thoại: không chạm một lúc → vòng tròn giữa màn hình; kéo ngón tay → vòng tròn đi theo
@@ -17,6 +17,8 @@
   const ARROW = 'M3 2v17.2l4.4-4.2 3 6.6 3.1-1.3-2.9-6.4h6.2z';
   const MOUSE_IDLE = 1200;                          // ms chuột đứng yên → vòng tròn
   const TOUCH_IDLE = 2200;                          // ms không chạm → về giữa màn hình
+  // trạng thái "chưa dựng" — giống .is-unbuilt trong style.css (dùng translate/scale riêng để không đè transform của phần tử)
+  const UNBUILT = { opacity: 0, filter: 'blur(5px)', translate: '0 8px', scale: '0.985' };
 
   const now = () => performance.now();
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -126,10 +128,23 @@
     }
 
     /** Dựng lại các phần vừa đổi trạng thái.
-     *  targets: [{ el | rect:()=>({left,top,right,bottom}), key?, label, clipEl?, veil?: độ mờ 0–1 | false, tone?: màu lớp mờ, delay? }]
-     *  Phần nào đang được dựng thì bỏ qua (nội dung mới vẫn hiện ra dưới khung đang kéo). */
+     *  targets: [{ el | rect:()=>({left,top,right,bottom}), key?, label, clipEl?, delay? }]
+     *   - el: phần tử biến mất ngay, kéo khung xong thì hiện ra lại như lúc mở trang
+     *   - rect: một vùng (bản đồ) — phủ lớp mờ { veil: độ mờ, tone: màu }, khung kéo tới đâu rõ tới đó
+     *  Phần nào đang được dựng thì bỏ qua. */
     rebuild(targets) {
-      if (!this.enabled) return Promise.resolve();
+      return this.rebuildWaves([targets]);
+    }
+
+    /** Như rebuild() nhưng theo đợt: đợt sau chờ đợt trước xong (vd. dựng khung bảng rồi mới tới từng mục).
+     *  Mọi phần của mọi đợt đều biến mất ngay từ đầu, rồi lần lượt được dựng lại. */
+    async rebuildWaves(waves) {
+      if (!this.enabled) return;
+      const W = waves.map((w) => this._register(w)).filter((w) => w.length);
+      for (const w of W) await Promise.all(w.map((k, j) => this._runTask(k, j)));
+    }
+
+    _register(targets) {
       const list = [];
       for (const t of targets || []) {
         if (!t) continue;
@@ -137,9 +152,26 @@
         if (!key || this.rbKeys.has(key)) continue;
         const k = Object.assign({}, t, { type: 'box', rebuild: true, key });
         this.rbKeys.set(key, k);
+        this.active.add(k);
+        this._hide(k);
         list.push(k);
       }
-      return Promise.all(list.map((k, j) => this._runTask(k, j)));
+      return list;
+    }
+
+    _hide(k) {
+      if (!k.el || !k.el.animate) return;
+      k.hideAnim = k.el.animate([UNBUILT], { duration: 160, easing: 'ease-out', fill: 'forwards' });
+    }
+
+    _show(k) {
+      const a = k.hideAnim;
+      if (!a) return;
+      k.hideAnim = null;
+      a.cancel();
+      if (!k.el.isConnected) return;
+      // từ "chưa dựng" về trạng thái thật của phần tử — cùng nhịp với transition lúc mở trang
+      k.el.animate([Object.assign({ offset: 0 }, UNBUILT)], { duration: 480, easing: 'cubic-bezier(.2, .8, .2, 1)' });
     }
 
     /** Chờ các lượt dựng lại xong (tối đa max ms) — để bầy dựng giao diện trước rồi mới bay ra bản đồ. */
@@ -165,6 +197,7 @@
           this.active.delete(task);
           if (task.rebuild) {
             this._unveil(task);
+            this._show(task);
             if (this.rbKeys.get(task.key) === task) this.rbKeys.delete(task.key);
           }
           try { if (!task._arrived && task.onArrive) task.onArrive(); } catch (e) { /* bỏ qua */ }
@@ -250,15 +283,11 @@
 
     /* ── lớp mờ của phần đang được dựng lại ───────────── */
     _veil(k) {
-      if (k.veil === false) return;
+      if (k.el || k.veil === false) return;               // phần tử thì đã biến mất hẳn, không cần lớp mờ
       const v = document.createElement('div');
       v.className = 'sw-veil';
       if (k.tone) v.style.setProperty('--v', k.tone);
       v.style.setProperty('--o', k.veil == null ? 0.7 : k.veil);
-      if (k.el && !k.clipEl) {
-        const br = getComputedStyle(k.el).borderRadius;
-        if (br && br !== '0px') v.style.borderRadius = br;
-      }
       this.root.insertBefore(v, this.root.firstChild);     // nằm dưới con trỏ và khung chọn
       k.veilEl = v;
       this._placeVeil(k, 0, 0);
